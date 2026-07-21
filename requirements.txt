@@ -1,0 +1,30 @@
+# audio-to-notes —— 脚本依赖（分层安装，按需取用）
+#
+# 用法（建议在独立 venv 中安装）：
+#   python -m pip install -r requirements.txt          # 只装核心 + 默认后端（推荐起步）
+# 其余为可选块，按需解除注释或单独 pip install。
+#
+# 平台：纯 CPU 即可运行；无需 CUDA。Windows 用户跑 download_models.sh 请用 Git Bash / WSL。
+# ---------------------------------------------------------------------------
+
+# ===== 1. 核心（所有听译路径必需） =====
+imageio-ffmpeg            # 自带 ffmpeg 二进制，音视频转码为 16k 单声道 WAV
+numpy                     # 波形数组处理
+
+# ===== 2. 默认 ASR 后端 SenseVoice + 默认说话人分轨（sherpa，无 torch/token） =====
+sherpa-onnx              # SenseVoice(int8) 转写 + silero-VAD 分段 + 声学分轨
+
+# ===== 3. 可选 ASR 后端：faster-whisper（--backend whisper，英文/通用更强） =====
+# faster-whisper
+
+# ===== 4. 可选情绪识别：emotion2vec+（--with-emotion 或 scripts/emotion.py） =====
+# 较重，含 torch。torch 与 torchaudio 版本必须一致（实测 2.11.0 组合可用）。
+# funasr
+# modelscope
+# torch==2.11.0
+# torchaudio==2.11.0
+
+# ===== 5. 可选说话人分轨回退引擎：pyannote（--engine pyannote，需 HF token + 接受协议） =====
+# 默认分轨用 sherpa（见 §2），仅当显式要 pyannote 时才需要以下依赖。
+# torch
+# pyannote.audio
