@@ -77,10 +77,6 @@ python scripts/diarize.py --segments "./out/transcripts/segments.json" \
 # 4) URL 输入（音频直链则下载后听译；网页则抓正文为文本）
 python scripts/fetch_input.py --url "https://example.com/ep01.mp3" --workdir "./out"
 
-# 5) 全链路冒烟测试：从原音频 + 全长 segments.json 切出前 15 分钟对齐子集
-python scripts/smoke_cut.py --src "long.m4a" \
-    --segments "./out/transcripts/segments.json" \
-    --out-dir "./out/smoke" --duration 900   # 900 秒 = 15 分钟
 ```
 
 听译产物（两后端 schema 一致）：
@@ -101,7 +97,6 @@ audio-to-notes/
 │   ├── diarize.py              # 说话人分轨（sherpa 默认 / pyannote 回退）
 │   ├── emotion.py              # 情绪识别（emotion2vec+，独立/可内联）
 │   ├── fetch_input.py          # URL → 音频下载或网页正文抽取
-│   ├── smoke_cut.py            # 切前 N 分钟子集做全链路冒烟测试
 │   └── download_models.sh      # 一键下载 sherpa/whisper 模型
 ├── templates/                  # 提示词模板（产出形态，可扩展）
 │   ├── blog_deepnote.md        # 文章/播客深度笔记

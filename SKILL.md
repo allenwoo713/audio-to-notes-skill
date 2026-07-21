@@ -92,7 +92,6 @@ python scripts/diarize.py --segments "<工作目录>/transcripts/segments.json" 
 - `scripts/transcribe.py` — 本地听译（必用；`--backend whisper|sensevoice`）
 - `scripts/diarize.py` — 说话人分轨（可选、手动触发；`--engine sherpa|pyannote`，默认 sherpa 无需 token）
 - `scripts/emotion.py` — 情绪识别（可选；emotion2vec+，需 funasr；也可经 transcribe.py `--with-emotion` 合并执行）
-- `scripts/smoke_cut.py` — 把长录音切出前 N 秒子集 + 同步过滤 segments.json，供快速全链路冒烟测试
 - `scripts/fetch_input.py` — URL 输入处理
 - `scripts/download_models.sh` — 一键下载所有 sherpa/whisper 模型（本机有 GitHub 访问权时）；默认落在本 skill 的 `models/` 目录，脚本会自动探测，无需设环境变量
 - `templates/` — 提示词模板库（新增形态在此加文件）

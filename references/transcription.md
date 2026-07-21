@@ -137,14 +137,14 @@ python scripts/emotion.py --segments <transcripts>/segments.json --audio <音频
 | `pip install funasr` 报 `SAFE_DELETE_FAIL_CLOSED` / 卸载 numpy 失败 | 沙箱删除策略 fail-closed：pip 升级/卸载现有包（如把 numpy 降级）需删除文件，被沙箱拒绝并整体中止。本沙箱内**无法**装 funasr/torch。正常机器上 `pip install -U funasr modelscope` 即可；若想避开对 numpy 的变动，用 `pip install --no-cache-dir --no-deps funasr` 再单独装其余依赖。 |
 | diarize 挂死（进度停在某 % 不动）/ 退出码 139 段错误 | sherpa-onnx 原生 ONNX 推理在此构建或特定音频上偶发不稳定（非 Python 层可控）。同环境下 92 分钟全量自动聚类曾成功产出，15 分钟子集偶发卡在 ~25%。遇此不要反复重试，直接回退到 SKILL.md「步骤 4」的 LLM 内容归属（Q1 默认路径），或换 `--engine pyannote`（需 torch + HF token）。 |
 
-## 7. 快速冒烟测试（smoke test，长音频专用）
+## 7. 长音频快速验证（开发调试建议）
 
-全量分轨/情绪在 90 分钟级音频上可能要 ~1 小时。本地快速验证全链路用 `scripts/smoke_cut.py` 切出前 N 秒子集（默认 15 分钟，同时过滤 `segments.json` 保持对齐）：
+全量分轨/情绪在 90 分钟级音频上可能要 ~1 小时。若要快速验证全链路，可把原音频切出前 N 秒子集，但**必须同步过滤 segments.json**，否则分轨时间戳会错位。
+
+用 ffmpeg 切音频（16k 单声道，匹配管线输入）：
 ```bash
-python scripts/smoke_cut.py --src "<原始录音.mp3>" \
-  --segments "<工作目录>/transcripts/segments.json" \
-  --out-dir "<工作目录>/smoke" [--duration 900]
-# 产出 smoke/recording_cut.wav（16k 单声道）+ smoke/segments_ref.json（过滤后的段）
-# 后续所有步骤都改用 smoke/recording_cut.wav 与 smoke/transcripts/，分轨可从 ~1h 降到 ~1–2 分钟。
+ffmpeg -y -ss 0 -t 900 -i "<原始录音.mp3>" -ar 16000 -ac 1 -f wav "<工作目录>/smoke/recording_cut.wav"
 ```
-注意：只切音频、不切 segments 会让分轨的时间戳错位——本脚本两者同步切割，避免该坑。
+再按 `start/end` 过滤 `segments.json`：仅保留 `start < 900` 的段，跨越边界的段把 `end` 截断到 900，得到 `<工作目录>/smoke/segments_ref.json`。后续步骤改用该子集，分轨可从 ~1h 降到 ~1–2 分钟。
+
+> 切分 + 过滤脚本 `smoke_cut.py` 仅用于开发调试，不随 skill 发布；发布版请用上面的 ffmpeg 命令 + 手动过滤。
