@@ -72,7 +72,7 @@ python scripts/transcribe.py --input "podcast.mp3" --workdir "./out" --with-emot
 
 # 3) 说话人分轨（可选，声学；已知人数就显式给 --num-speakers）
 python scripts/diarize.py --segments "./out/transcripts/segments.json" \
-    --audio "podcast.mp3" --out "./out/transcripts/segments_spk.json" --num-speakers 3
+    --audio "podcast.mp3" --out "./out/transcripts/transcript_timed_speaker.txt" --num-speakers 3
 
 # 4) URL 输入（音频直链则下载后听译；网页则抓正文为文本）
 python scripts/fetch_input.py --url "https://example.com/ep01.mp3" --workdir "./out"
@@ -97,7 +97,7 @@ audio-to-notes/
 │   ├── diarize.py              # 说话人分轨（sherpa 默认 / pyannote 回退）
 │   ├── emotion.py              # 情绪识别（emotion2vec+，独立/可内联）
 │   ├── fetch_input.py          # URL → 音频下载或网页正文抽取
-│   └── download_models.sh      # 一键下载 sherpa/whisper 模型
+│   └── download_models.sh      # 一键下载 sherpa 模型（SenseVoice / silero-vad / 分轨）
 ├── templates/                  # 提示词模板（产出形态，可扩展）
 │   ├── blog_deepnote.md        # 文章/播客深度笔记
 │   ├── meeting_minutes.md      # 会议纪要
@@ -130,4 +130,9 @@ audio-to-notes/
 
 ## 许可
 
-脚本代码基于本仓库许可分发。第三方模型（SenseVoice / silero-vad / emotion2vec+ / pyannote / faster-whisper）各自遵循其上游许可，使用前请查阅对应上游仓库。
+- **本仓库代码**：MIT License（见 [LICENSE](./LICENSE)）。
+- **第三方模型**：各自遵循其上游许可，**使用前请查阅对应上游仓库**。汇总见 [THIRD_PARTY_MODELS.md](./THIRD_PARTY_MODELS.md)：
+  - SenseVoice / silero-vad / sherpa-onnx 系列（k2-fsa）：Apache-2.0
+  - emotion2vec+（iic / Alibaba）：ModelScope 社区许可（免费用于研究/商业需符合其条款）
+  - pyannote / faster-whisper：MIT（pyannote 模型权重另受 HuggingFace 门控协议约束）
+  - 3D-Speaker 嵌入：相关论文/仓库许可

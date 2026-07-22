@@ -180,18 +180,20 @@ def main():
 
     model = load_emotion_model(args.model)
 
-    wav = os.path.join(tempfile.gettempdir(), "a2n_emo.wav")
-    to_wav16k(args.audio, wav)
-    audio, sr = read_wav_f32(wav)
+    # 任务隔离的临时目录：进程唯一，退出（含异常）自动清理，避免并发互相覆盖。
+    with tempfile.TemporaryDirectory() as td:
+        wav = os.path.join(td, "emo.wav")
+        to_wav16k(args.audio, wav)
+        audio, sr = read_wav_f32(wav)
 
-    classify_emotions(segs, audio, sr, model, min_dur=args.min_dur, topk=args.topk)
+        classify_emotions(segs, audio, sr, model, min_dur=args.min_dur, topk=args.topk)
 
-    json.dump(segs, open(emo_json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    with open(emo_txt, "w", encoding="utf-8") as f:
-        for s in segs:
-            f.write(f"[{s.get('emotion','unknown')}] [{fmt(s['start'])} - {fmt(s['end'])}] {s['text']}\n")
+        json.dump(segs, open(emo_json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        with open(emo_txt, "w", encoding="utf-8") as f:
+            for s in segs:
+                f.write(f"[{s.get('emotion','unknown')}] [{fmt(s['start'])} - {fmt(s['end'])}] {s['text']}\n")
 
-    print(f"[emotion] 完成 -> {emo_json}\n[emotion] 人读版 -> {emo_txt}", flush=True)
+        print(f"[emotion] 完成 -> {emo_json}\n[emotion] 人读版 -> {emo_txt}", flush=True)
 
 
 if __name__ == "__main__":

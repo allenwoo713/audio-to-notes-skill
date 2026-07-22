@@ -148,22 +148,25 @@ def diarize_sherpa(args):
         sys.exit(2)
     sd = sherpa_onnx.OfflineSpeakerDiarization(cfg)
 
-    wav = os.path.join(tempfile.gettempdir(), "a2n_diar.wav")
-    to_wav16k(args.audio, wav)
-    audio, sr = read_wav_f32(wav)
-    if sr != sd.sample_rate:
-        sys.stderr.write(f"[diarize] 采样率不匹配：期望 {sd.sample_rate}，实际 {sr}。\n")
+    # 任务隔离的临时目录：进程唯一，退出（含异常）自动清理，避免并发互相覆盖。
+    with tempfile.TemporaryDirectory() as td:
+        wav = os.path.join(td, "dia.wav")
+        to_wav16k(args.audio, wav)
+        audio, sr = read_wav_f32(wav)
+        if sr != sd.sample_rate:
+            sys.stderr.write(f"[diarize] 采样率不匹配：期望 {sd.sample_rate}，实际 {sr}。\n")
 
-    print("[diarize] sherpa-onnx 分轨中（与音频长度成正比）...", flush=True)
+        print("[diarize] sherpa-onnx 分轨中（与音频长度成正比）...", flush=True)
 
-    def cb(done, total):
-        if total:
-            print(f"[diarize] 进度 {done / total * 100:.1f}%", flush=True)
-        return 0
+        def cb(done, total):
+            if total:
+                print(f"[diarize] 进度 {done / total * 100:.1f}%", flush=True)
+            return 0
 
-    result = sd.process(audio, callback=cb).sort_by_start_time()
-    turns = [(r.start, r.end, f"SPEAKER_{r.speaker:02d}") for r in result]
-    return turns
+        result = sd.process(audio, callback=cb).sort_by_start_time()
+        turns = [(r.start, r.end, f"SPEAKER_{r.speaker:02d}") for r in result]
+        return turns
+    # TemporaryDirectory 退出时自动清理 wav
 
 
 # --------------------------------------------------------------------------- #
@@ -184,8 +187,31 @@ def diarize_pyannote(args):
         sys.exit(3)
     pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
     print("[diarize] pyannote 分轨中 ...", flush=True)
-    diar = pipeline(args.audio)
+    # 已知人数时显式传给 pyannote（num_speakers=-1 时传 None 让其自动聚类）
+    diar = pipeline(args.audio, num_speakers=args.num_speakers if args.num_speakers and args.num_speakers > 0 else None)
     return [(t.start, t.end, sp) for t, _, sp in diar.itertracks(yield_label=True)]
+
+
+# --------------------------------------------------------------------------- #
+# 时间重叠归因（纯函数，便于单测）：给定 segment 与全部 turn，返回归属说话人。
+def speaker_at(seg, turns):
+    # 按时间重叠比例归因：收集与 segment 时间区间重叠的所有 turn，
+    # 取重叠时长最大者；覆盖率（重叠总长 / 段长）过低则标 SPEAKER_??
+    # （跨多个说话人的段不应整体归给一人）。
+    s0, e0 = seg["start"], seg["end"]
+    best_sp, best_ov = None, 0.0
+    covered = 0.0
+    for s, e, sp in turns:
+        ov = min(e0, e) - max(s0, s)
+        if ov > 0:
+            covered += ov
+            if ov > best_ov:
+                best_ov, best_sp = ov, sp
+    if best_sp is None:
+        return "SPEAKER_??"
+    if covered < (e0 - s0) * 0.5:
+        return "SPEAKER_??"
+    return best_sp
 
 
 # --------------------------------------------------------------------------- #
@@ -215,25 +241,9 @@ def main():
     json.dump([{"start": s, "end": e, "speaker": sp} for s, e, sp in turns],
               open(turns_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
-    def speaker_at(t):
-        # t：segment 中点（标量秒）。优先找包含 t 的 turn；
-        # 若 t 落在 turn 间空隙，取时间距离最近的 turn。
-        # 注意：不能用 min(e,t)-max(s,t) 判重叠——对单点 t 该式恒 ≤ 0，
-        # 会导致所有 segment 都跌入 SPEAKER_??。
-        inside_sp = None
-        best, best_d = None, float("inf")
-        for s, e, sp in turns:
-            if s <= t <= e:
-                inside_sp = sp
-                break
-            d = min(abs(t - s), abs(t - e))
-            if d < best_d:
-                best_d, best = d, sp
-        return (inside_sp or best) or "SPEAKER_??"
-
     with open(args.out, "w", encoding="utf-8") as f:
         for s in segs:
-            sp = speaker_at((s["start"] + s["end"]) / 2)
+            sp = speaker_at(s, turns)
             f.write(f"[{sp}] [{fmt(s['start'])} - {fmt(s['end'])}] {s['text']}\n")
 
     n_spk = len({t[2] for t in turns})

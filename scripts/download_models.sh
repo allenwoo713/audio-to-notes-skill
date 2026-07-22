@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # audio-to-notes — 模型一键下载脚本（可移植版）
 #
-# 适用：本机可访问 GitHub releases 时，拉取所有 sherpa-onnx / whisper 模型。
+# 适用：本机可访问 GitHub releases 时，拉取所有 sherpa-onnx 模型。
 # 可移植铁律：不写死任何本机绝对路径；根目录默认是 skill 自身的 models/，
 #             也可由 $MODEL_ROOT 覆盖。
 #
@@ -21,7 +21,8 @@
 # emotion2vec+ 不在本脚本内——它经 funasr 首次运行时自动下载，见文末说明。
 # ---------------------------------------------------------------------------
 
-set -u
+# 严格模式：遇未定义变量 / 命令失败 / 管道中断即中止，避免静默部分失败。
+set -euo pipefail
 
 # ---- 可配置项（仅此处一处可改） -------------------------------------------
 # 默认下载到 skill 自身的 models/ 目录（结构简单、随 skill 走、好找）。
@@ -47,6 +48,15 @@ EMB_FILE="3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 EMB_URL="$REPO/speaker-recongition-models/$EMB_FILE"
 # ---------------------------------------------------------------------------
 
+# 日志函数必须先定义（严格模式下 $GREEN 等变量须先赋值，否则 set -u 会中止）。
+GREEN=''; YEL=''; RED=''; NC=''
+# 非 TTY 时关闭彩色，避免日志里出现控制字符
+if [ -t 1 ]; then GREEN='\033[0;32m'; YEL='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'; fi
+
+log()  { printf "%b[download]%b %s\n" "$GREEN" "$NC" "$1"; }
+warn() { printf "%b[skip]%b    %s\n" "$YEL" "$NC" "$1"; }
+err()  { printf "%b[ERROR]%b   %s\n" "$RED" "$NC" "$1" >&2; }
+
 # 模型权重体积大（数百 MB），不应纳入 skill 版本控制。
 # 确保 models/ 存在，并写入 .gitignore（仅忽略权重、保留 .gitignore 自身）。
 mkdir -p "$MODEL_ROOT"
@@ -56,35 +66,61 @@ if [ ! -f "$MODEL_ROOT/.gitignore" ]; then
   log "已写入 $MODEL_ROOT/.gitignore（权重不会被提交）"
 fi
 
-GREEN=''; YEL=''; RED=''; NC=''
-# 非 TTY 时关闭彩色，避免日志里出现控制字符
-if [ -t 1 ]; then GREEN='\033[0;32m'; YEL='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'; fi
+# sha256_of <file>  —— 输出文件的 SHA-256（无 sha256sum 时回退到 openssl/shasum）。
+sha256_of() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print $NF}'
+  else
+    echo ""
+  fi
+}
 
-log()  { printf "%b[download]%b %s\n" "$GREEN" "$NC" "$1"; }
-warn() { printf "%b[skip]%b    %s\n" "$YEL" "$NC" "$1"; }
-err()  { printf "%b[ERROR]%b   %s\n" "$RED" "$NC" "$1"; }
-
-# download_file <url> <out_path>  —— 带重试、断点续传、非空校验
+# download_file <url> <out_path> [<expected_sha256>]  —— 原子下载 + 可选完整性校验
+#   - 先落盘到 $out.part，成功且非空后再原子 rename 为 $out（避免半截文件被当成品）。
+#   - 若提供第 3 个参数（期望 SHA-256），下载后校验，不符则报错并删除。
+#   - 带重试；curl 用 -f 使 HTTP 错误不被当成成功内容。
 download_file() {
-  local url="$1" out="$2"
+  local url="$1" out="$2" expect="${3:-}"
+  local part="$out.part"
   mkdir -p "$(dirname "$out")"
   if [ -s "$out" ]; then
-    warn "已存在且非空，跳过：$out"
-    return 0
+    if [ -n "$expect" ]; then
+      local cur; cur="$(sha256_of "$out")"
+      if [ "$cur" = "$expect" ]; then warn "已存在且校验通过，跳过：$out"; return 0; fi
+      warn "已存在但校验不符，重新下载：$out"
+    else
+      warn "已存在且非空，跳过：$out"; return 0
+    fi
   fi
   log "下载：$url"
   local i rc=1
   for i in 1 2 3; do
-    if curl -L -C - -f -o "$out" "$url"; then
-      if [ -s "$out" ]; then rc=0; break; fi
+    if curl -L -C - -f -o "$part" "$url"; then
+      if [ -s "$part" ]; then rc=0; break; fi
     fi
     err "第 $i 次尝试失败，重试…"
-    rm -f "$out"
+    rm -f "$part"
   done
   if [ "$rc" -ne 0 ]; then
     err "下载失败：$url"
     return 1
   fi
+  # 完整性校验（可选）
+  if [ -n "$expect" ]; then
+    local got; got="$(sha256_of "$part")"
+    if [ -n "$got" ] && [ "$got" != "$expect" ]; then
+      err "校验失败：$out 期望 $expect 实际 $got"
+      rm -f "$part"
+      return 1
+    fi
+  fi
+  # 原子 rename
+  mv -f "$part" "$out"
   log "完成：$out"
   return 0
 }

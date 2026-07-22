@@ -39,4 +39,4 @@ input_types: [audio, doc, url]  # 该模板接受哪些输入类型
 
 ## 说话人识别（requires_speakers: true 时）
 
-SKILL.md 会优先尝试 `scripts/diarize.py`（pyannote 声纹分轨，需 `HF_TOKEN`）；不可用时回退到「用户提供参会者名单 + LLM 按内容归属 + 发言人A/B 占位符 + （发言人待确认）」。模板 SOP 内应明确：无法确认归属时标 `（发言人待确认）`，不得猜测。
+SKILL.md 会优先尝试 `scripts/diarize.py` 的 **sherpa 引擎**（pyannote 分割转 ONNX + 3D-Speaker 嵌入，**无需 torch / HF_TOKEN**）；仅当用户显式要求 pyannote 或 sherpa 不可用时，才回退到 `--engine pyannote`（需 `HF_TOKEN`）。声学分轨都不可用时，最终回退到「用户提供参会者名单 + LLM 按内容归属 + 发言人A/B 占位符 + （发言人待确认）」。模板 SOP 内应明确：无法确认归属时标 `（发言人待确认）`，不得猜测。

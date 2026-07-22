@@ -237,6 +237,58 @@ def run_sensevoice(args, wav_path, skill_dir):
 
 
 # --------------------------------------------------------------------------- #
+# cache manifest (prevents silently reusing stale segments.json across inputs)
+# --------------------------------------------------------------------------- #
+def _manifest_entry(args, input_path):
+    """Describe this transcription run so we can detect stale cache reuse."""
+    exists = os.path.isfile(input_path)
+    return {
+        "input": os.path.abspath(input_path),
+        "input_size": os.path.getsize(input_path) if exists else None,
+        "input_mtime": os.path.getmtime(input_path) if exists else None,
+        "backend": args.backend,
+        "model": args.model,
+        "language": args.language,
+        "with_emotion": bool(args.with_emotion),
+        "emotion_model": args.emotion_model,
+    }
+
+
+def _manifest_matches(manifest_path, args, input_path):
+    if not os.path.isfile(manifest_path):
+        return False
+    try:
+        m = json.load(open(manifest_path, encoding="utf-8"))
+    except Exception:
+        return False
+    cur = _manifest_entry(args, input_path)
+    return all(m.get(k) == cur.get(k) for k in cur)
+
+
+def _run_inline_emotion(args, segments, wav_path, skill_dir, out_dir):
+    """Optional SER: reuse the already-decoded waveform, lazy-import funasr."""
+    try:
+        sys.path.insert(0, skill_dir)
+        from emotion import load_emotion_model, classify_emotions
+        audio_emo, sr_emo = read_wav_f32(wav_path)
+        model_emo = load_emotion_model(args.emotion_model)
+        n_cls = classify_emotions(segments, audio_emo, sr_emo, model_emo)
+        json.dump(segments, open(os.path.join(out_dir, "segments_emotion.json"), "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+        with open(os.path.join(out_dir, "transcript_timed_emotion.txt"), "w", encoding="utf-8") as f:
+            for s in segments:
+                f.write(f"[{s.get('emotion', 'unknown')}] [{fmt_ts(s['start'])} - {fmt_ts(s['end'])}] {s['text']}\n")
+        print(f"[transcribe] 情绪标注完成（{n_cls}/{len(segments)} 段有效）"
+              f" -> {out_dir}/segments_emotion.json", flush=True)
+    except ImportError as e:
+        sys.stderr.write(
+            f"\n[transcribe] funasr 未安装，跳过情绪标注：{e}\n"
+            f"[transcribe] 启用：pip install -U funasr modelscope\n")
+    except Exception as e:
+        sys.stderr.write(f"\n[transcribe] 情绪标注失败（已保留转写结果）：{e}\n")
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 def main():
@@ -266,24 +318,54 @@ def main():
     out_dir = os.path.join(args.workdir, "transcripts")
     os.makedirs(out_dir, exist_ok=True)
     seg_path = os.path.join(out_dir, "segments.json")
+    manifest_path = os.path.join(out_dir, "manifest.json")
 
-    wav_path = None
+    # ---- reuse or re-run? ----
+    # 防止跨输入静默复用旧的 segments.json：复用前必须校验 --input 存在且
+    # manifest 记录的 input/backend/model/language/emotion 参数全匹配。
+    segments = None
     if os.path.isfile(seg_path) and not args.force:
-        print(f"[transcribe] 复用已有 {seg_path}（--force 可强制重跑）", flush=True)
-        segments = json.load(open(seg_path, encoding="utf-8"))
-    else:
-        ffmpeg = find_ffmpeg()
-        wav_path = os.path.join(tempfile.gettempdir(), "a2n_input.wav")
-        print("[transcribe] 转码为 16kHz 单声道 WAV ...", flush=True)
-        to_wav(args.input, wav_path, ffmpeg)
-
-        if args.backend == "sensevoice":
-            segments = run_sensevoice(args, wav_path, skill_dir)
+        if not os.path.isfile(args.input):
+            sys.stderr.write(
+                f"[transcribe] 复用失败：--input 不存在（{args.input}）。\n"
+                f"[transcribe] 无法确认旧 segments.json 属于当前输入；请重新提供输入，或用 --force 强制重跑。\n"
+            )
+            sys.exit(1)
+        if _manifest_matches(manifest_path, args, args.input):
+            print(f"[transcribe] 复用已有 {seg_path}（manifest 匹配，--force 可强制重跑）", flush=True)
+            segments = json.load(open(seg_path, encoding="utf-8"))
         else:
-            segments = run_whisper(args, wav_path, skill_dir)
+            print("[transcribe] 输入或参数与旧缓存不符，重新转写...", flush=True)
 
-        json.dump(segments, open(seg_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-        print(f"[transcribe] 完成 {len(segments)} 段 -> {seg_path}", flush=True)
+    if segments is None:
+        # 任务隔离的临时目录：进程唯一，退出（含异常）自动清理，避免并发互相覆盖。
+        with tempfile.TemporaryDirectory() as td:
+            ffmpeg = find_ffmpeg()
+            wav_path = os.path.join(td, "input.wav")
+            print("[transcribe] 转码为 16kHz 单声道 WAV ...", flush=True)
+            to_wav(args.input, wav_path, ffmpeg)
+
+            if args.backend == "sensevoice":
+                segments = run_sensevoice(args, wav_path, skill_dir)
+            else:
+                segments = run_whisper(args, wav_path, skill_dir)
+
+            json.dump(segments, open(seg_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            print(f"[transcribe] 完成 {len(segments)} 段 -> {seg_path}", flush=True)
+
+            if args.with_emotion:
+                _run_inline_emotion(args, segments, wav_path, skill_dir, out_dir)
+
+            json.dump(_manifest_entry(args, args.input), open(manifest_path, "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=1)
+        # TemporaryDirectory 退出时自动清理 wav
+
+    elif args.with_emotion and not os.path.isfile(os.path.join(out_dir, "segments_emotion.json")):
+        # 复用路径但本次要求情绪且尚未生成：重新解码一次（仍用隔离临时目录）
+        with tempfile.TemporaryDirectory() as td:
+            wav_path = os.path.join(td, "input.wav")
+            to_wav(args.input, wav_path, find_ffmpeg())
+            _run_inline_emotion(args, segments, wav_path, skill_dir, out_dir)
 
     full = "\n".join(s["text"] for s in segments)
     with open(os.path.join(out_dir, "transcript_full.txt"), "w", encoding="utf-8") as f:
@@ -291,34 +373,6 @@ def main():
     with open(os.path.join(out_dir, "transcript_timed.txt"), "w", encoding="utf-8") as f:
         for s in segments:
             f.write(f"[{fmt_ts(s['start'])} - {fmt_ts(s['end'])}] {s['text']}\n")
-
-    # ---- optional: inline emotion recognition (approach 1) ----
-    # 复用转写时已解码的 16k 波形，逐段跑 emotion2vec+，零二次 ffmpeg 解码。
-    # funasr 惰性 import；未安装则优雅跳过、保留转写结果（不致命）。
-    if args.with_emotion:
-        try:
-            sys.path.insert(0, skill_dir)
-            from emotion import load_emotion_model, classify_emotions
-            wav_for_emo = wav_path
-            if not wav_for_emo or not os.path.isfile(wav_for_emo):
-                wav_for_emo = os.path.join(tempfile.gettempdir(), "a2n_input.wav")
-                to_wav(args.input, wav_for_emo, find_ffmpeg())
-            audio_emo, sr_emo = read_wav_f32(wav_for_emo)
-            model_emo = load_emotion_model(args.emotion_model)
-            n_cls = classify_emotions(segments, audio_emo, sr_emo, model_emo)
-            json.dump(segments, open(os.path.join(out_dir, "segments_emotion.json"), "w", encoding="utf-8"),
-                      ensure_ascii=False, indent=1)
-            with open(os.path.join(out_dir, "transcript_timed_emotion.txt"), "w", encoding="utf-8") as f:
-                for s in segments:
-                    f.write(f"[{s.get('emotion', 'unknown')}] [{fmt_ts(s['start'])} - {fmt_ts(s['end'])}] {s['text']}\n")
-            print(f"[transcribe] 情绪标注完成（{n_cls}/{len(segments)} 段有效）"
-                  f" -> {out_dir}/segments_emotion.json", flush=True)
-        except ImportError as e:
-            sys.stderr.write(
-                f"\n[transcribe] funasr 未安装，跳过情绪标注：{e}\n"
-                f"[transcribe] 启用：pip install -U funasr modelscope\n")
-        except Exception as e:
-            sys.stderr.write(f"\n[transcribe] 情绪标注失败（已保留转写结果）：{e}\n")
 
     total = segments[-1]["end"] if segments else 0
     print(f"[transcribe] 全文约 {len(full)} 字，时长约 {fmt_ts(total)}。"
